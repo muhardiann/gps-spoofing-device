@@ -4,6 +4,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 // =================================================================
 // --- Konfigurasi Perangkat ---
@@ -11,7 +13,7 @@
 static const int GPS_RX_PIN = 16;
 static const int GPS_TX_PIN = 17;
 static const uint32_t GPS_BAUD = 9600;
-const unsigned long OUTPUT_INTERVAL = 2000;
+const unsigned long OUTPUT_INTERVAL =15000;
 
 // --- Konfigurasi LCD ---
 #define SDA_LCD 21
@@ -44,8 +46,9 @@ struct SatelliteInfo
 } sats[MAX_SATELLITES];
 
 // --- Function Prototypes (Deklarasi Fungsi) ---
-void updateSatelliteData();
 void printAndDisplayData();
+void sendDataToBackend();
+void updateSatelliteData();
 void printFloat(float val, bool valid, int len, int prec);
 void printInt(unsigned long val, bool valid, int len);
 void printDateTime(TinyGPSDate &d, TinyGPSTime &t);
@@ -81,12 +84,12 @@ void setup()
   }
 
   Serial.println("\nWiFi Terhubung!");
-  Serial.print("Alamat IP: ");
-  Serial.println(WiFi.localIP());
+  Serial.print("Terhubung ke SSID: ");
+  Serial.println(WiFi.SSID());
   lcd.clear();
   lcd.print("WiFi Connected!");
   lcd.setCursor(0, 1);
-  lcd.print(WiFi.localIP());
+  lcd.print(WiFi.SSID().substring(0, 16));
   delay(2000);
 
   Serial.println(F("=========================== ESP32 GPS Data Logger ==========================="));
@@ -120,6 +123,13 @@ void loop()
     {
       dataCount++;
       printAndDisplayData();
+      sendDataToBackend();
+
+      // --- BAGIAN 3: Reset data satelit ---
+      for (int i = 0; i < MAX_SATELLITES; ++i)
+      {
+        sats[i].active = false;
+      }
     }
     else
     {
@@ -134,6 +144,74 @@ void loop()
 // =================================================================
 // --- Fungsi Helper ---
 // =================================================================
+
+void sendDataToBackend()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("Koneksi WiFi terputus. Gagal mengirim data.");
+    return;
+  }
+
+  int visibleSatsCount = 0;
+  for (int i = 0; i < MAX_SATELLITES; ++i) {
+    if (sats[i].active) {
+      visibleSatsCount++;
+    }
+  }
+
+  if (visibleSatsCount < 5) {
+    Serial.printf("Data diabaikan. Satelit terlihat hanya %d (butuh minimal 5).\n", visibleSatsCount);
+    return; // Hentikan fungsi dan jangan kirim data
+  }
+
+  StaticJsonDocument<1024> doc;
+
+  char isoTimestamp[25];
+  sprintf(isoTimestamp, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+          gps.date.year(), gps.date.month(), gps.date.day(),
+          gps.time.hour(), gps.time.minute(), gps.time.second());
+
+  doc["timestamp"] = isoTimestamp;
+  doc["latitude"] = gps.location.lat();
+  doc["longitude"] = gps.location.lng();
+  doc["sats"] = gps.satellites.value();
+  doc["hdop"] = gps.hdop.hdop();
+
+  JsonArray visibleSats = doc.createNestedArray("visible_sats");
+  for (int i = 0; i < MAX_SATELLITES; ++i)
+  {
+    if (sats[i].active)
+    {
+      JsonObject satObject = visibleSats.createNestedObject();
+      satObject["prn"] = sats[i].prn;
+      satObject["elev"] = sats[i].elevation;
+      satObject["azim"] = sats[i].azimuth;
+      satObject["snr"] = sats[i].snr;
+    }
+  }
+
+  String jsonPayload;
+  serializeJson(doc, jsonPayload);
+
+  HTTPClient http;
+  String serverUrl = "https://gps-spoofing-backend.vercel.app/api/signal_data"; // GANTI DENGAN URL ANDA
+
+  http.begin(serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  int httpResponseCode = http.POST(jsonPayload);
+
+  Serial.print("Mengirim data ke backend... ");
+  if (httpResponseCode > 0)
+  {
+    Serial.printf("Status: %d\n", httpResponseCode);
+  }
+  else
+  {
+    Serial.printf("Gagal, error: %s\n", http.errorToString(httpResponseCode).c_str());
+  }
+  http.end();
+}
 
 void printAndDisplayData()
 {
@@ -194,12 +272,6 @@ void printAndDisplayData()
   String snrStr = String(maxSnr);
   lcd.setCursor(LCD_COLS - snrStr.length(), 1);
   lcd.print(snrStr);
-
-  // --- BAGIAN 3: Reset data satelit ---
-  for (int i = 0; i < MAX_SATELLITES; ++i)
-  {
-    sats[i].active = false;
-  }
 }
 
 void updateSatelliteData()
