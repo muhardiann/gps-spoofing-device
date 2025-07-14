@@ -2,6 +2,8 @@
 #include <HardwareSerial.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <WiFiManager.h>
 
 // =================================================================
 // --- Konfigurasi Perangkat ---
@@ -27,6 +29,7 @@ long dataCount = 0;
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
 LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
+WiFiManager wm;
 
 static const int MAX_SATELLITES = 40;
 TinyGPSCustom satNumber[4], elevation[4], azimuth[4], snr[4];
@@ -60,6 +63,31 @@ void setup()
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("GPS Data Logger");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Setup WiFi...");
+  Serial.println("\nMemulai WiFiManager...");
+
+  wm.setConfigPortalTimeout(180);
+
+  if (!wm.autoConnect("Spoofing-Detector", "12345678"))
+  {
+    Serial.println("Gagal terhubung dan timeout tercapai.");
+    lcd.clear();
+    lcd.print("WiFi Gagal!");
+    delay(3000);
+    // Restart ESP jika gagal terhubung
+    ESP.restart();
+  }
+
+  Serial.println("\nWiFi Terhubung!");
+  Serial.print("Alamat IP: ");
+  Serial.println(WiFi.localIP());
+  lcd.clear();
+  lcd.print("WiFi Connected!");
+  lcd.setCursor(0, 1);
+  lcd.print(WiFi.localIP());
+  delay(2000);
 
   Serial.println(F("=========================== ESP32 GPS Data Logger ==========================="));
   Serial.println(F("No.  | Tanggal      Waktu      Latitude    Longitude     Sats  HDOP"));
