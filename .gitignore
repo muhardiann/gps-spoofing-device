@@ -1,0 +1,14 @@
+# File konfigurasi VS Code & PlatformIO
+.vscode/
+.pio/
+.idea/
+
+# File environment yang berisi password
+.env
+
+# File hasil build
+/firmware.bin
+/firmware.elf
+
+# Dependensi Node.js jika ada
+node_modules/
