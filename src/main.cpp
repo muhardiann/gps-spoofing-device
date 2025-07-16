@@ -9,7 +9,7 @@
 static const int GPS_RX_PIN = 16;
 static const int GPS_TX_PIN = 17;
 static const uint32_t GPS_BAUD = 9600;
-const unsigned long OUTPUT_INTERVAL = 2000;
+const unsigned long OUTPUT_INTERVAL = 5000; // Interval 5 detik
 
 // --- Konfigurasi LCD ---
 #define SDA_LCD 21
@@ -40,7 +40,7 @@ struct SatelliteInfo
   int snr = 0;
 } sats[MAX_SATELLITES];
 
-// --- Function Prototypes (Deklarasi Fungsi) ---
+// --- Deklarasi Fungsi ---
 void updateSatelliteData();
 void printAndDisplayData();
 void printFloat(float val, bool valid, int len, int prec);
@@ -60,8 +60,11 @@ void setup()
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("GPS Data Logger");
+  lcd.setCursor(0, 1);
+  lcd.print("Offline Mode");
+  delay(2000);
 
-  Serial.println(F("=========================== ESP32 GPS Data Logger ==========================="));
+  Serial.println(F("=========================== ESP32 GPS Data Logger (Offline Mode) ==========================="));
   Serial.println(F("No.  | Tanggal      Waktu      Latitude    Longitude     Sats  HDOP"));
   Serial.println(F("-----------------------------------------------------------------------------"));
 
@@ -83,22 +86,16 @@ void loop()
 
   while (gpsSerial.available() > 0)
     gps.encode(gpsSerial.read());
+
   if (snr[0].isUpdated())
     updateSatelliteData();
 
   if (millis() - lastOutputTime > OUTPUT_INTERVAL)
   {
-    if (gps.location.isValid())
-    {
-      dataCount++;
-      printAndDisplayData();
-    }
-    else
-    {
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Mencari Sinyal");
-    }
+    // Cukup panggil fungsi untuk mencetak dan menampilkan data setiap interval
+    dataCount++;
+    printAndDisplayData();
+
     lastOutputTime = millis();
   }
 }
@@ -109,7 +106,41 @@ void loop()
 
 void printAndDisplayData()
 {
-  // --- BAGIAN 1: Mencetak baris utama ke Serial Monitor ---
+  // --- BAGIAN 1: Mengupdate LCD ---
+  if (gps.location.isValid())
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(gps.location.lat(), 6);
+    String satsStr = String(gps.satellites.value());
+    lcd.setCursor(LCD_COLS - satsStr.length(), 0);
+    lcd.print(satsStr);
+
+    lcd.setCursor(0, 1);
+    lcd.print(gps.location.lng(), 6);
+    int maxSnr = 0;
+    for (int i = 0; i < MAX_SATELLITES; ++i)
+    {
+      if (sats[i].active && sats[i].snr > maxSnr)
+      {
+        maxSnr = sats[i].snr;
+      }
+    }
+    String snrStr = String(maxSnr);
+    lcd.setCursor(LCD_COLS - snrStr.length(), 1);
+    lcd.print(snrStr);
+  }
+  else
+  {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Mencari Sinyal");
+    lcd.setCursor(0, 1);
+    lcd.print("                "); // Bersihkan baris kedua
+  }
+
+  // --- BAGIAN 2: Mencetak semua data ke Serial Monitor untuk logging ---
+  // Ini akan mencetak data apa adanya, baik valid maupun tidak (misal, sats: 0, hdop: 99.99)
   Serial.printf("%-4ld | ", dataCount);
   printDateTime(gps.date, gps.time);
   printFloat(gps.location.lat(), gps.location.isValid(), 12, 6);
@@ -118,7 +149,7 @@ void printAndDisplayData()
   printFloat(gps.hdop.hdop(), gps.hdop.isValid(), 6, 2);
   Serial.println();
 
-  // --- BARU: Menambahkan kembali bagian untuk mencetak detail satelit ---
+  // Mencetak detail satelit yang terlihat
   bool firstSat = true;
   for (int i = 0; i < MAX_SATELLITES; ++i)
   {
@@ -129,45 +160,13 @@ void printAndDisplayData()
         Serial.println(F("  --- Detail Satelit Terlihat (PRN, Elev, Azim, SNR) ---"));
         firstSat = false;
       }
-      Serial.print(F("    PRN: "));
-      printInt(sats[i].prn, true, 3);
-      Serial.print(F(" Elev: "));
-      printInt(sats[i].elevation, true, 3);
-      Serial.print(F(" Azim: "));
-      printInt(sats[i].azimuth, true, 4);
-      Serial.print(F(" SNR: "));
-      printInt(sats[i].snr, true, 4);
-      Serial.println();
+      Serial.printf("    PRN: %-3d Elev: %-3d Azim: %-4d SNR: %-4d\n", sats[i].prn, sats[i].elevation, sats[i].azimuth, sats[i].snr);
     }
   }
   if (!firstSat)
     Serial.println(F("  ----------------------------------------------------"));
 
-  // --- BAGIAN 2: Mengupdate LCD ---
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(gps.location.lat(), 6);
-
-  String satsStr = String(gps.satellites.value());
-  lcd.setCursor(LCD_COLS - satsStr.length(), 0);
-  lcd.print(satsStr);
-
-  lcd.setCursor(0, 1);
-  lcd.print(gps.location.lng(), 6);
-
-  int maxSnr = 0;
-  for (int i = 0; i < MAX_SATELLITES; ++i)
-  {
-    if (sats[i].active && sats[i].snr > maxSnr)
-    {
-      maxSnr = sats[i].snr;
-    }
-  }
-  String snrStr = String(maxSnr);
-  lcd.setCursor(LCD_COLS - snrStr.length(), 1);
-  lcd.print(snrStr);
-
-  // --- BAGIAN 3: Reset data satelit ---
+  // --- BAGIAN 3: Reset data satelit untuk pembacaan berikutnya ---
   for (int i = 0; i < MAX_SATELLITES; ++i)
   {
     sats[i].active = false;
