@@ -13,7 +13,7 @@
 static const int GPS_RX_PIN = 16;
 static const int GPS_TX_PIN = 17;
 static const uint32_t GPS_BAUD = 9600;
-const unsigned long OUTPUT_INTERVAL =15000;
+const unsigned long OUTPUT_INTERVAL = 5000;
 
 // --- Konfigurasi LCD ---
 #define SDA_LCD 21
@@ -32,9 +32,9 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
 LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
 WiFiManager wm;
-
-static const int MAX_SATELLITES = 40;
+String sessionId;
 TinyGPSCustom satNumber[4], elevation[4], azimuth[4], snr[4];
+static const int MAX_SATELLITES = 40;
 
 struct SatelliteInfo
 {
@@ -90,7 +90,15 @@ void setup()
   lcd.print("WiFi Connected!");
   lcd.setCursor(0, 1);
   lcd.print(WiFi.SSID().substring(0, 16));
-  delay(2000);
+  delay(1000);
+
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char macStr[18] = {0};
+  sprintf(macStr, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  sessionId = String(macStr) + "-" + String(millis());
+  Serial.print("Session ID untuk sesi ini: ");
+  Serial.println(sessionId);
 
   Serial.println(F("=========================== ESP32 GPS Data Logger ==========================="));
   Serial.println(F("No.  | Tanggal      Waktu      Latitude    Longitude     Sats  HDOP"));
@@ -114,18 +122,23 @@ void loop()
 
   while (gpsSerial.available() > 0)
     gps.encode(gpsSerial.read());
+
   if (snr[0].isUpdated())
     updateSatelliteData();
 
   if (millis() - lastOutputTime > OUTPUT_INTERVAL)
   {
-    if (gps.location.isValid())
+    // --- LOGIKA BARU: Gabungkan semua kondisi untuk sinyal bagus ---
+    bool isSignalGood = gps.location.isValid() && gps.hdop.isValid() && gps.hdop.hdop() != 99.99;
+
+    if (isSignalGood)
     {
+      // Jika sinyal bagus, proses dan kirim data
       dataCount++;
       printAndDisplayData();
       sendDataToBackend();
 
-      // --- BAGIAN 3: Reset data satelit ---
+      // Reset data satelit untuk pembacaan berikutnya
       for (int i = 0; i < MAX_SATELLITES; ++i)
       {
         sats[i].active = false;
@@ -133,9 +146,12 @@ void loop()
     }
     else
     {
+      // Jika sinyal buruk (lokasi tidak valid ATAU HDOP 99.99), tampilkan "Mencari Sinyal"
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("Mencari Sinyal");
+      lcd.setCursor(0, 1);
+      lcd.print("                "); // Bersihkan baris kedua
     }
     lastOutputTime = millis();
   }
@@ -154,18 +170,21 @@ void sendDataToBackend()
   }
 
   int visibleSatsCount = 0;
-  for (int i = 0; i < MAX_SATELLITES; ++i) {
-    if (sats[i].active) {
+  for (int i = 0; i < MAX_SATELLITES; ++i)
+  {
+    if (sats[i].active)
+    {
       visibleSatsCount++;
     }
   }
 
-  if (visibleSatsCount < 5) {
+  if (visibleSatsCount < 5)
+  {
     Serial.printf("Data diabaikan. Satelit terlihat hanya %d (butuh minimal 5).\n", visibleSatsCount);
     return; // Hentikan fungsi dan jangan kirim data
   }
 
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<1200> doc;
 
   char isoTimestamp[25];
   sprintf(isoTimestamp, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
@@ -177,6 +196,7 @@ void sendDataToBackend()
   doc["longitude"] = gps.location.lng();
   doc["sats"] = gps.satellites.value();
   doc["hdop"] = gps.hdop.hdop();
+  doc["session_id"] = sessionId;
 
   JsonArray visibleSats = doc.createNestedArray("visible_sats");
   for (int i = 0; i < MAX_SATELLITES; ++i)
