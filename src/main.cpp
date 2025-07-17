@@ -160,7 +160,15 @@ void printAndDisplayData()
         Serial.println(F("  --- Detail Satelit Terlihat (PRN, Elev, Azim, SNR) ---"));
         firstSat = false;
       }
-      Serial.printf("    PRN: %-3d Elev: %-3d Azim: %-4d SNR: %-4d\n", sats[i].prn, sats[i].elevation, sats[i].azimuth, sats[i].snr);
+      Serial.print(F("    PRN: "));
+      printInt(sats[i].prn, true, 3);
+      Serial.print(F(" Elev: "));
+      printInt(sats[i].elevation, true, 3);
+      Serial.print(F(" Azim: "));
+      printInt(sats[i].azimuth, true, 4);
+      Serial.print(F(" SNR: "));
+      printInt(sats[i].snr, true, 4);
+      Serial.println();
     }
   }
   if (!firstSat)
