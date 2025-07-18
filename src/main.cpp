@@ -22,20 +22,16 @@ static const int LCD_ADDRESS = 0x27;
 static const int LCD_COLS = 16;
 static const int LCD_ROWS = 2;
 
-// --- Counter Data ---
+// --- Variabel Global ---
 long dataCount = 0;
-
-// =================================================================
-// --- Inisialisasi Objek ---
-// =================================================================
+String sessionId;
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
 LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLS, LCD_ROWS);
-WiFiManager wm;
-String sessionId;
-TinyGPSCustom satNumber[4], elevation[4], azimuth[4], snr[4];
-static const int MAX_SATELLITES = 40;
+WiFiManager wm; //
 
+static const int MAX_SATELLITES = 40;
+TinyGPSCustom satNumber[4], elevation[4], azimuth[4], snr[4];
 struct SatelliteInfo
 {
   bool active = false;
@@ -45,7 +41,7 @@ struct SatelliteInfo
   int snr = 0;
 } sats[MAX_SATELLITES];
 
-// --- Function Prototypes (Deklarasi Fungsi) ---
+// --- Deklarasi Fungsi ---
 void printAndDisplayData();
 void sendDataToBackend();
 void updateSatelliteData();
@@ -59,27 +55,13 @@ void printDateTime(TinyGPSDate &d, TinyGPSTime &t);
 void setup()
 {
   Serial.begin(115200);
-  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-
-  Wire.begin(SDA_LCD, SCL_LCD);
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("GPS Data Logger");
-
-  lcd.setCursor(0, 1);
-  lcd.print("Setup WiFi...");
-  Serial.println("\nMemulai WiFiManager...");
-
   wm.setConfigPortalTimeout(180);
 
   if (!wm.autoConnect("Spoofing-Detector", "12345678"))
   {
-    Serial.println("Gagal terhubung dan timeout tercapai.");
-    lcd.clear();
-    lcd.print("WiFi Gagal!");
+    Serial.println("Gagal terhubung. Restart dalam 3 detik.");
+
     delay(3000);
-    // Restart ESP jika gagal terhubung
     ESP.restart();
   }
 
@@ -116,8 +98,7 @@ void setup()
 // =================================================================
 // --- Fungsi Loop Utama ---
 // =================================================================
-void loop()
-{
+void loop() {
   static unsigned long lastOutputTime = 0;
 
   while (gpsSerial.available() > 0)
@@ -126,33 +107,15 @@ void loop()
   if (snr[0].isUpdated())
     updateSatelliteData();
 
-  if (millis() - lastOutputTime > OUTPUT_INTERVAL)
-  {
-    // --- LOGIKA BARU: Gabungkan semua kondisi untuk sinyal bagus ---
-    bool isSignalGood = gps.location.isValid() && gps.hdop.isValid() && gps.hdop.hdop() != 99.99;
+  if (millis() - lastOutputTime > OUTPUT_INTERVAL) {
+    dataCount++;
+    printAndDisplayData();
+    sendDataToBackend(); // Mengirim data ke backend setiap interval
 
-    if (isSignalGood)
-    {
-      // Jika sinyal bagus, proses dan kirim data
-      dataCount++;
-      printAndDisplayData();
-      sendDataToBackend();
-
-      // Reset data satelit untuk pembacaan berikutnya
-      for (int i = 0; i < MAX_SATELLITES; ++i)
-      {
-        sats[i].active = false;
-      }
+    for (int i = 0; i < MAX_SATELLITES; ++i) {
+      sats[i].active = false;
     }
-    else
-    {
-      // Jika sinyal buruk (lokasi tidak valid ATAU HDOP 99.99), tampilkan "Mencari Sinyal"
-      lcd.clear();
-      lcd.setCursor(0, 0);
-      lcd.print("Mencari Sinyal");
-      lcd.setCursor(0, 1);
-      lcd.print("                "); // Bersihkan baris kedua
-    }
+    
     lastOutputTime = millis();
   }
 }
@@ -161,49 +124,34 @@ void loop()
 // --- Fungsi Helper ---
 // =================================================================
 
-void sendDataToBackend()
-{
-  if (WiFi.status() != WL_CONNECTED)
-  {
+void sendDataToBackend() {
+  if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Koneksi WiFi terputus. Gagal mengirim data.");
     return;
   }
+  
+  JsonDocument doc;
 
-  int visibleSatsCount = 0;
-  for (int i = 0; i < MAX_SATELLITES; ++i)
-  {
-    if (sats[i].active)
-    {
-      visibleSatsCount++;
-    }
+  if (gps.date.isValid() && gps.time.isValid()) {
+    char isoTimestamp[25];
+    sprintf(isoTimestamp, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
+            gps.date.year(), gps.date.month(), gps.date.day(),
+            gps.time.hour(), gps.time.minute(), gps.time.second());
+    doc["timestamp"] = isoTimestamp;
+  } else {
+    doc["timestamp"] = nullptr;
   }
 
-  if (visibleSatsCount < 5)
-  {
-    Serial.printf("Data diabaikan. Satelit terlihat hanya %d (butuh minimal 5).\n", visibleSatsCount);
-    return; // Hentikan fungsi dan jangan kirim data
-  }
-
-  StaticJsonDocument<1200> doc;
-
-  char isoTimestamp[25];
-  sprintf(isoTimestamp, "%04d-%02d-%02dT%02d:%02d:%02d.000Z",
-          gps.date.year(), gps.date.month(), gps.date.day(),
-          gps.time.hour(), gps.time.minute(), gps.time.second());
-
-  doc["timestamp"] = isoTimestamp;
   doc["latitude"] = gps.location.lat();
   doc["longitude"] = gps.location.lng();
   doc["sats"] = gps.satellites.value();
   doc["hdop"] = gps.hdop.hdop();
   doc["session_id"] = sessionId;
 
-  JsonArray visibleSats = doc.createNestedArray("visible_sats");
-  for (int i = 0; i < MAX_SATELLITES; ++i)
-  {
-    if (sats[i].active)
-    {
-      JsonObject satObject = visibleSats.createNestedObject();
+   JsonArray visibleSats = doc["visible_sats"].to<JsonArray>();
+  for (int i = 0; i < MAX_SATELLITES; ++i) {
+    if (sats[i].active) {
+      JsonObject satObject = visibleSats.add<JsonObject>();
       satObject["prn"] = sats[i].prn;
       satObject["elev"] = sats[i].elevation;
       satObject["azim"] = sats[i].azimuth;
@@ -215,19 +163,15 @@ void sendDataToBackend()
   serializeJson(doc, jsonPayload);
 
   HTTPClient http;
-  String serverUrl = "https://gps-spoofing-backend.vercel.app/api/signal_data"; // GANTI DENGAN URL ANDA
-
+  String serverUrl = "https://gps-spoofing-backend.vercel.app/api/signal_data";
   http.begin(serverUrl);
   http.addHeader("Content-Type", "application/json");
   int httpResponseCode = http.POST(jsonPayload);
 
   Serial.print("Mengirim data ke backend... ");
-  if (httpResponseCode > 0)
-  {
+  if (httpResponseCode > 0) {
     Serial.printf("Status: %d\n", httpResponseCode);
-  }
-  else
-  {
+  } else {
     Serial.printf("Gagal, error: %s\n", http.errorToString(httpResponseCode).c_str());
   }
   http.end();
@@ -269,30 +213,32 @@ void printAndDisplayData()
   if (!firstSat)
     Serial.println(F("  ----------------------------------------------------"));
 
-  // --- BAGIAN 2: Mengupdate LCD ---
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(gps.location.lat(), 6);
-
-  String satsStr = String(gps.satellites.value());
-  lcd.setCursor(LCD_COLS - satsStr.length(), 0);
-  lcd.print(satsStr);
-
-  lcd.setCursor(0, 1);
-  lcd.print(gps.location.lng(), 6);
-
-  int maxSnr = 0;
-  for (int i = 0; i < MAX_SATELLITES; ++i)
-  {
-    if (sats[i].active && sats[i].snr > maxSnr)
-    {
-      maxSnr = sats[i].snr;
+  if (gps.location.isValid()) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print(gps.location.lat(), 6);
+    String satsStr = String(gps.satellites.value());
+    lcd.setCursor(LCD_COLS - satsStr.length(), 0);
+    lcd.print(satsStr);
+    lcd.setCursor(0, 1);
+    lcd.print(gps.location.lng(), 6);
+    int maxSnr = 0;
+    for (int i = 0; i < MAX_SATELLITES; ++i) {
+      if (sats[i].active && sats[i].snr > maxSnr) {
+        maxSnr = sats[i].snr;
+      }
     }
+    String snrStr = String(maxSnr);
+    lcd.setCursor(LCD_COLS - snrStr.length(), 1);
+    lcd.print(snrStr);
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Mencari Sinyal");
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
   }
-  String snrStr = String(maxSnr);
-  lcd.setCursor(LCD_COLS - snrStr.length(), 1);
-  lcd.print(snrStr);
-}
+} 
 
 void updateSatelliteData()
 {
